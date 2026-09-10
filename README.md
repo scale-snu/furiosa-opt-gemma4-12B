@@ -44,10 +44,7 @@ The Stage 1 test checks:
 
 Stage 1 values to be finalized:
 
-- **TBD:** grading server URL and authentication method;
-- **TBD:** submission archive format and submission command;
-- **TBD:** submission deadline and maximum submissions per team;
-- **TBD:** formula for combining the three kernel cycle counts.
+- **TBD:** submission deadline.
 
 ### Stage 2 — End-to-end optimization
 
@@ -99,9 +96,9 @@ The Stage 1 skeleton is intentionally fixed so that submissions remain comparabl
 1. **Keep device function names and signatures unchanged.** The name, parameters, types,
    and return type of every `#[device]` function are part of the evaluator contract.
 2. **Only permitted implementation changes are graded.** Changes to `src/device/` and the
-   function bodies in `src/ops.rs`, `src/ops_vision.rs`, and `src/ops_audio.rs` are
-   included in the evaluation. Edits to `src/axes.rs`, `src/host/`, `src/api/`, `src/bin/`,
-   `src/lib.rs`, and `tests/` are ignored.
+   function bodies in `src/ops.rs` are included in the evaluation. Everything else is
+   ignored, including `src/ops_vision.rs`, `src/ops_audio.rs`, `src/axes.rs`, `src/host/`,
+   `src/api/`, `src/bin/`, `src/lib.rs`, and `tests/`.
 3. **Keep kernel module paths stable.** `src/ops.rs`, `src/ops_vision.rs`, and
    `src/ops_audio.rs` must remain at the crate root because compiled kernel names include
    `module_path!()`.
@@ -153,6 +150,25 @@ For a locally available RNGD setup, the repository also provides:
 ./scripts/local_test.sh
 ```
 
+### Submit for grading
+
+```sh
+cargo binstall moa-submitter-cli
+
+moa-submitter login
+moa-submitter submit         # run from the repository root
+moa-submitter status         # the state of every submission you have made
+moa-submitter status <id>    # the cycle counts and score of one submission
+moa-submitter log <id>       # the complete log, stage by stage
+```
+
+`submit` uploads `src/ops.rs` and everything under `src/device/`, so keep the original
+directory structure. Run it from the repository root, or pass
+`--source path/to/furiosa-opt-gemma4-12B`.
+
+Each submission is scored as the geometric mean of its speedup over the baseline across the
+three kernels. Only a team's highest score appears on the leaderboard.
+
 ## Toolchain
 
 The supported development environment is x86_64 Ubuntu 22.04 or newer with GLIBC 2.34 or
@@ -164,7 +180,7 @@ sudo apt install gcc-aarch64-linux-gnu
 
 rustup toolchain install nightly-2026-05-01
 cargo +nightly-2026-05-01 install cargo-binstall
-cargo +nightly-2026-05-01 binstall cargo-furiosa-opt
+cargo +nightly-2026-05-01 binstall cargo-furiosa-opt@0.6.0
 cargo install furiosa-schedule-viewer
 ```
 
@@ -193,6 +209,7 @@ The scheduler commands used for troubleshooting are:
 - [`furiosa_opt_std` API docs](https://docs.rs/furiosa-opt-std/latest/furiosa_opt_std/)
   — tensor types, mapping expressions, and engine modules.
 - [furiosa-arena-cli docs](https://github.com/kreatinj/furiosa-arena-cli#installation)
+- [moa-submitter-cli](https://github.com/micro2026-moa/moa-submitter-cli) — the submission CLI.
 - [OPTIMIZATION.md](OPTIMIZATION.md) — the Stage 1 kernel optimization workflow.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — repository layout and host/RNGD split.
 - [SERVING.md](SERVING.md) — running the model as an HTTP server.

@@ -113,7 +113,7 @@ chmod +x "$staging/remote_entrypoint.sh" "$staging/test_runtime"
 job_name="${RNGD_JOB_NAME:-rngd_test_$RANDOM}"
 
 echo "==> submitting $job_name ($(du -ch "$staging"/* | tail -1 | cut -f1) total)"
-if submit_output=$(furiosa-arena submit \
+submit_output=$(furiosa-arena submit \
     "$staging/remote_entrypoint.sh" \
     "$staging/test_runtime" \
     "$staging/fixtures.safetensors" \
@@ -158,6 +158,7 @@ state=""
 status_output=""
 while [ "$SECONDS" -lt "$deadline" ]; do
     status_output=$(furiosa-arena status "$job" 2>&1 || true)
+    status_output=$(furiosa-arena status "$job" 2>&1 || true)
     state=$(json_field "$status_output" status | tr '[:upper:]' '[:lower:]')
     is_terminal "$state" && break
     case "$state" in
@@ -174,6 +175,7 @@ fi
 
 code=$(json_field "$status_output" exit_code)
 echo "==> job $job $state (exit ${code:-?}); log follows"
+furiosa-arena logs "$job" || true
 furiosa-arena logs "$job" || true
 
 [ "${code:-1}" = "0" ]
