@@ -138,6 +138,15 @@ This builds the test binary, submits it through the RNGD scheduler, and reports 
 and real RNGD cycle counts. Use `--no-build` to reuse the latest binary or `--no-wait` to
 submit without waiting for the result.
 
+Submission is confirmed by `submitted job <id>`. The numeric server ID is different
+from the generated name `rngd_test_<random>`; use the server ID with `furiosa-arena status`.
+The script prints submission errors before exiting.
+
+The remote execution timeout uses the server default. Set `RNGD_TIMEOUT` only when
+you need a different limit within the server maximum. `RNGD_WAIT_TIMEOUT` separately
+controls how long the script waits locally, including queue time (default: 1800 seconds).
+Use `FURIOSA_ARENA_URL` for a custom controller; the script also accepts legacy `RNGD_URL`.
+
 For a locally available RNGD setup, the repository also provides:
 
 ```sh
@@ -164,18 +173,18 @@ Configure the Furiosa Arena CLI once before using `scripts/rngd_test.sh`:
 ```sh
 cargo binstall furiosa-arena-cli
 
-rngd login
+furiosa-arena login
 ```
 
 The scheduler commands used for troubleshooting are:
 
 | Command | Purpose |
 |---|---|
-| `rngd submit <file>` | Submit a script or binary |
-| `rngd status <id>` | Check job state |
-| `rngd logs <id> --follow` | Stream job output |
-| `rngd list` | List your jobs |
-| `rngd cancel <id>` | Cancel a queued or running job |
+| `furiosa-arena submit <file>` | Submit a script or binary |
+| `furiosa-arena status <id>` | Check job state |
+| `furiosa-arena logs <id> --follow` | Stream job output |
+| `furiosa-arena list` | List your jobs |
+| `furiosa-arena cancel <id>` | Cancel a queued or running job |
 
 ## References
 

@@ -3,10 +3,11 @@ set -euo pipefail
 
 CRATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$CRATE"
+export PATH="$CRATE/target/toolchains/furiosa-opt-0.6.0/bin:$PATH"
 
 FIXTURE="ref/fixtures.safetensors"
 POLL_SECONDS="${RNGD_POLL_SECONDS:-5}"
-TIMEOUT="${RNGD_TIMEOUT:-1800}"
+WAIT_TIMEOUT="${RNGD_WAIT_TIMEOUT:-1800}"
 
 build=1
 wait_for_result=1
@@ -14,12 +15,48 @@ for argument in "$@"; do
     case "$argument" in
         --no-build) build=0 ;;
         --no-wait) wait_for_result=0 ;;
-        -h|--help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage: ./scripts/rngd_test.sh [--no-build] [--no-wait]
+
+Build and submit the Stage 1 kernel tests with furiosa-arena.
+Run `furiosa-arena login` once before submitting.
+
+  --no-build  Reuse the latest test binary (only if sources are unchanged).
+  --no-wait   Return after submission and print the server's numeric job ID.
+
+Environment:
+  FURIOSA_ARENA_URL  Controller URL (CLI default when omitted).
+  RNGD_URL          Legacy controller URL, used when FURIOSA_ARENA_URL is unset.
+  RNGD_TIMEOUT      Optional remote execution limit in seconds (server default).
+  RNGD_WAIT_TIMEOUT Local wait limit including queue time (default: 1800 seconds).
+  RNGD_POLL_SECONDS Status polling interval (default: 5 seconds).
+  RNGD_JOB_NAME     Optional job name; this is not the server's numeric job ID.
+USAGE
+            exit 0 ;;
         *) echo "rngd_test.sh: unknown argument $argument" >&2; exit 2 ;;
     esac
 done
 
-if [ -z "${RNGD_URL:-}" ] && [ -f "$HOME/.bashrc" ]; then
+if ! command -v furiosa-arena >/dev/null 2>&1; then
+    echo "rngd_test.sh: furiosa-arena is missing; install it with: cargo binstall furiosa-arena-cli" >&2
+    exit 127
+fi
+
+if [[ ! "$WAIT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "rngd_test.sh: RNGD_WAIT_TIMEOUT must be a positive integer in seconds" >&2
+    exit 2
+fi
+timeout_args=()
+if [ -n "${RNGD_TIMEOUT:-}" ]; then
+    if [[ ! "$RNGD_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+        echo "rngd_test.sh: RNGD_TIMEOUT must be a positive integer in seconds" >&2
+        exit 2
+    fi
+    timeout_args=(--timeout "$RNGD_TIMEOUT")
+fi
+
+if [ -z "${FURIOSA_ARENA_URL:-}" ] && [ -z "${RNGD_URL:-}" ] && [ -f "$HOME/.bashrc" ]; then
     bashrc_line=$(grep -E '^[[:space:]]*export[[:space:]]+RNGD_URL=' "$HOME/.bashrc" | tail -1 || true)
     if [ -n "$bashrc_line" ]; then
         bashrc_value=${bashrc_line#*=}
@@ -29,10 +66,8 @@ if [ -z "${RNGD_URL:-}" ] && [ -f "$HOME/.bashrc" ]; then
     fi
 fi
 
-if [ -z "${RNGD_URL:-}" ]; then
-    echo "rngd_test.sh: \$RNGD_URL is not set and ~/.bashrc has no export for it." >&2
-    echo "  export RNGD_URL=https://rngd.example.com" >&2
-    exit 2
+if [ -z "${FURIOSA_ARENA_URL:-}" ] && [ -n "${RNGD_URL:-}" ]; then
+    export FURIOSA_ARENA_URL="$RNGD_URL"
 fi
 
 find_test_binary() {
@@ -42,7 +77,7 @@ find_test_binary() {
 
 if [ "$build" -eq 1 ]; then
     echo "==> building test_kernels (as a cargo test binary)"
-    build_json=$(cargo furiosa-opt test --release --test test_kernels --no-run --message-format=json)
+    build_json=$(cargo furiosa-opt test --release --test test_kernels --no-run --message-format=json-render-diagnostics)
     BINARY=$(printf '%s\n' "$build_json" \
         | grep '"kind":\["test"\]' \
         | grep '"name":"test_kernels"' \
@@ -78,23 +113,31 @@ chmod +x "$staging/remote_entrypoint.sh" "$staging/test_runtime"
 job_name="${RNGD_JOB_NAME:-rngd_test_$RANDOM}"
 
 echo "==> submitting $job_name ($(du -ch "$staging"/* | tail -1 | cut -f1) total)"
-submit_output=$(rngd submit \
+if submit_output=$(furiosa-arena submit \
     "$staging/remote_entrypoint.sh" \
     "$staging/test_runtime" \
     "$staging/fixtures.safetensors" \
     --name "$job_name" \
     --entrypoint remote_entrypoint.sh \
-    --timeout "$TIMEOUT" 2>&1)
-echo "$submit_output"
+    "${timeout_args[@]}" 2>&1); then
+    printf '%s\n' "$submit_output"
+else
+    submit_status=$?
+    printf '%s\n' "$submit_output" >&2
+    echo "rngd_test.sh: submission failed (exit $submit_status); no job ID was confirmed" >&2
+    exit "$submit_status"
+fi
 
 job=$(printf '%s\n' "$submit_output" | sed -n 's/.*submitted job \([0-9][0-9]*\).*/\1/p' | head -1)
 if [ -z "$job" ]; then
-    echo "rngd_test.sh: could not find a job id in rngd's output (shown above)" >&2
+    echo "rngd_test.sh: could not find a job ID in furiosa-arena's output; check furiosa-arena list before retrying" >&2
     exit 1
 fi
 
+echo "==> server job ID: $job (name: $job_name); check with: furiosa-arena status $job"
+
 if [ "$wait_for_result" -eq 0 ]; then
-    echo "==> submitted job $job; follow it with: rngd logs $job"
+    echo "==> submitted job $job; follow it with: furiosa-arena logs $job --follow"
     exit 0
 fi
 
@@ -110,11 +153,11 @@ is_terminal() {
 }
 
 echo "==> waiting on job $job (polling every ${POLL_SECONDS}s)"
-deadline=$(( SECONDS + TIMEOUT ))
+deadline=$(( SECONDS + WAIT_TIMEOUT ))
 state=""
 status_output=""
 while [ "$SECONDS" -lt "$deadline" ]; do
-    status_output=$(rngd status "$job" 2>&1 || true)
+    status_output=$(furiosa-arena status "$job" 2>&1 || true)
     state=$(json_field "$status_output" status | tr '[:upper:]' '[:lower:]')
     is_terminal "$state" && break
     case "$state" in
@@ -125,12 +168,12 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 done
 
 if ! is_terminal "$state"; then
-    echo "rngd_test.sh: job $job still '${state:-unknown}' after ${TIMEOUT}s; cancel with: rngd cancel $job" >&2
+    echo "rngd_test.sh: job $job still '${state:-unknown}' after ${WAIT_TIMEOUT}s; cancel with: furiosa-arena cancel $job" >&2
     exit 1
 fi
 
 code=$(json_field "$status_output" exit_code)
 echo "==> job $job $state (exit ${code:-?}); log follows"
-rngd logs "$job" || true
+furiosa-arena logs "$job" || true
 
 [ "${code:-1}" = "0" ]
