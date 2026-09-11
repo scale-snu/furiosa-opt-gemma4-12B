@@ -10,37 +10,41 @@ pub(crate) fn add(
     x: &DmTensor<bf16, Chip, Cluster, Slice, m![H]>,
     residual: &DmTensor<bf16, Chip, Cluster, Slice, m![H]>,
 ) -> DmTensor<bf16, Chip, Cluster, Slice, m![H]> {
-    const TILES: usize = H::SIZE / 480;
+    type AddingSlices = m![1 # 32, H / 480];
 
-    let mut output: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = DmTensor::new();
+    // 기존 480-element 타일 8개를 이웃 slice에 분산하여 동시에 더한다.
+    // 각 slice의 residual VRF는 f32 480개(1,920 bytes)이며 bf16 반올림은 기존과 같다.
+    let x: DmTensor<bf16, Chip, Cluster, AddingSlices, m![H % 480]> = x.to_dm(&mut ctx.tdma);
+    let residual: DmTensor<bf16, Chip, Cluster, AddingSlices, m![H % 480]> = residual.to_dm(&mut ctx.tdma);
+    let residual_vrf: VrfTensor<f32, Chip, Cluster, AddingSlices, m![H % 480]> = ctx
+        .sub
+        .begin(residual.view())
+        .fetch::<m![1], m![H % 480]>()
+        .fetch_cast::<f32>()
+        .collect::<m![H / 8 % 60], m![H % 8]>()
+        .to_vrf();
 
-    for i in 0..TILES {
-        let x_tile = x.view().tile::<m![H], 480, m![H = 480 # 3840]>(480 * i);
-        let residual_tile = residual.view().tile::<m![H], 480, m![H = 480 # 3840]>(480 * i);
+    let output: DmTensor<bf16, Chip, Cluster, AddingSlices, m![H % 480]> = ctx
+        .main
+        .begin(x.view())
+        .fetch::<m![1], m![H % 480]>()
+        .fetch_cast::<f32>()
+        .collect::<m![H / 8 % 60], m![H % 8]>()
+        .vector_init()
+        .vector_intra_slice_tag(TagMode::Zero)
+        .vector_clip(ClipBinaryOpF32::Add, &residual_vrf)
+        .vector_final()
+        .cast::<bf16, m![H % 8 # 16]>()
+        .commit_trim::<m![H % 8]>()
+        .commit();
 
-        let residual_vrf: VrfTensor<f32, Chip, Cluster, Slice, m![H = 480]> = ctx
-            .sub
-            .begin(residual_tile)
-            .fetch::<m![1], m![H = 480]>()
-            .fetch_cast::<f32>()
-            .collect::<m![H = 480 / 8], m![H = 480 % 8]>()
-            .to_vrf();
-
-        ctx.main
-            .begin(x_tile)
-            .fetch::<m![1], m![H = 480]>()
-            .fetch_cast::<f32>()
-            .collect::<m![H = 480 / 8], m![H = 480 % 8]>()
-            .vector_init()
-            .vector_intra_slice_tag(TagMode::Zero)
-            .vector_clip(ClipBinaryOpF32::Add, &residual_vrf)
-            .vector_final()
-            .cast::<bf16, m![H = 480 % 8 # 16]>()
-            .commit_trim::<m![H = 480 % 8]>()
-            .commit_view(output.view_mut().tile::<m![H], 480, m![H = 480 #{!} 3840]>(480 * i));
-    }
-
-    output
+    ctx.main
+        .begin(output.view())
+        .fetch::<m![1], m![H % 480]>()
+        .switch::<Slice, m![H / 480]>(SwitchConfig::Broadcast1 { slice1: 8, slice0: 1 })
+        .collect::<m![H / 16], m![H % 16]>()
+        .commit_trim::<m![H % 16]>()
+        .commit()
 }
 
 pub(crate) fn scale_by_layer_gate(

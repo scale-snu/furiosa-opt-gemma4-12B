@@ -8,7 +8,7 @@ FIXTURE="ref/fixtures.safetensors"
 
 for argument in "$@"; do
     case "$argument" in
-        -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) echo '사용법: ./scripts/local_test.sh — 로컬 RNGD에서 Stage 1 테스트 실행'; exit 0 ;;
         *) echo "local_test.sh: unknown argument $argument" >&2; exit 2 ;;
     esac
 done
@@ -20,4 +20,4 @@ if [ ! -f "$FIXTURE" ]; then
 fi
 
 echo "==> running test_kernels"
-TUC_PROFILE_LEVEL="${TUC_PROFILE_LEVEL:-info}" cargo furiosa-opt test --release --test test_kernels
+TUC_PROFILE_LEVEL="${TUC_PROFILE_LEVEL:-info}" "$CRATE/scripts/furiosa.sh" test --release --test test_kernels

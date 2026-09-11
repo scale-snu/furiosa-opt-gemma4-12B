@@ -15,6 +15,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(backend, values("npu"))', 
 path = "src/lib.rs"
 
 [dependencies]
+# scripts/furiosa.sh도 이 버전을 읽어 같은 버전의 컴파일러를 선택한다.
 furiosa-opt-std = "=0.6.0"
 tokio = { version = "1.29", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 safetensors = "0.4"

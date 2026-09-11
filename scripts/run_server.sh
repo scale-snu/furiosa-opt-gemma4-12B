@@ -1,5 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-cargo furiosa-opt test --release
-cargo furiosa-opt run --release --bin server
+CRATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$CRATE"
+
+"$CRATE/scripts/furiosa.sh" test --release
+"$CRATE/scripts/furiosa.sh" run --release --bin server

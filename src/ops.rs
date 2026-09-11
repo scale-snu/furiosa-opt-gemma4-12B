@@ -56,19 +56,29 @@ pub fn sliding_project_qkv(
     v_cache: &mut HbmTensor<bf16, Chip, m![Ts, Ns, Ds]>,
     q_out: &mut HbmTensor<bf16, Chip, m![Ns, Gs, Ds]>,
 ) {
-    let x: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = x.to_dm(&mut ctx.tdma);
+    let x: DmTensor<bf16, Chip, m![Dummy2], Slice, m![H]> = x.to_dm(&mut ctx.tdma);
     let x = shared::rmsnorm::normalize(ctx, &x, input_rms_weight);
 
-    let x: DmTensor<bf16, Chip, Cluster, Replicated, m![H]> = layout::broadcast_hidden(ctx, &x);
+    // 240개씩 16개 slice에 분산한 뒤 모아, ring에서 전송하는 packet을 줄인다.
+    // DMA와 switch는 bf16 값을 그대로 옮기며 각 목적지 slice에 전체 H를 복제한다.
+    let x: DmTensor<bf16, Chip, m![Dummy2], m![H / 240, 1 # 16], m![H % 240]> = x.to_dm(&mut ctx.tdma);
+    let x: DmTensor<bf16, Chip, m![Dummy2], Replicated, m![H]> = ctx
+        .main
+        .begin(x.view())
+        .fetch::<m![1], m![H % 240]>()
+        .switch::<Replicated, m![H / 240]>(SwitchConfig::CustomBroadcast { ring_size: 256 })
+        .collect::<m![H / 16], m![H % 16]>()
+        .commit_trim::<m![H % 16]>()
+        .commit();
 
-    let q: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Gs, Ds]> =
+    let q: DmTensor<bf16, Chip, m![Ns / 4], Slice, m![Ns % 4, Gs, Ds]> =
         sliding::projection::project_query(ctx, &x, q_weight, q_weight_scale);
     let (k, v) = sliding::projection::project_key_value(ctx, &x, k_weight, v_weight, k_weight_scale, v_weight_scale);
 
-    let q: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Gs, Ds]> =
+    let q: DmTensor<bf16, Chip, m![Ns / 4], Slice, m![Ns % 4, Gs, Ds]> =
         sliding::rmsnorm::normalize_query(ctx, &q, q_rms_weight);
-    let k: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Ds]> = sliding::rmsnorm::normalize_key(ctx, &k, k_rms_weight);
-    let v: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Ds]> = sliding::rmsnorm::normalize_value(ctx, &v);
+    let k: DmTensor<bf16, Chip, m![Ns / 4], Slice, m![Ns % 4, Ds]> = sliding::rmsnorm::normalize_key(ctx, &k, k_rms_weight);
+    let v: DmTensor<bf16, Chip, m![Ns / 4], Slice, m![Ns % 4, Ds]> = sliding::rmsnorm::normalize_value(ctx, &v);
 
     let (q, k) = sliding::rope::apply_rope(ctx, &q, &k, rope_offset, cos, sin);
 
@@ -138,16 +148,13 @@ pub fn sliding_attention_output(
     o_weight_scale: &HbmTensor<bf16, Chip, m![H]>,
     residual_hbm: &mut HbmTensor<bf16, Chip, m![H]>,
 ) {
-    let x: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Gs, Ds]> = x.to_dm(&mut ctx.tdma);
-    let x: DmTensor<bf16, Chip, Cluster, Slice, m![Qs]> = unsafe { x.reshape() };
-    let x: DmTensor<bf16, Chip, Cluster, Replicated, m![Qs]> = layout::broadcast_sliding_heads(ctx, &x);
+    let x = layout::broadcast_sliding_heads(ctx, x);
 
     let x: DmTensor<bf16, Chip, Cluster, Slice, m![H]> =
         sliding::projection::project_output(ctx, &x, o_weight, o_weight_scale);
-    let x: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = shared::rmsnorm::normalize(ctx, &x, post_attn_rms_weight);
 
     let residual: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = residual_hbm.to_dm(&mut ctx.tdma);
-    let residual: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = shared::residual::add(ctx, &x, &residual);
+    let residual: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = shared::rmsnorm::normalize_add(ctx, &x, post_attn_rms_weight, &residual);
     residual.view().to_hbm_view(&mut ctx.tdma, residual_hbm.view_mut());
 }
 
@@ -222,9 +229,33 @@ pub fn decoder_feedforward(
     layer_scalar: &HbmTensor<bf16, Chip, m![1 # 8]>,
 ) {
     let residual: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = residual_hbm.to_dm(&mut ctx.tdma);
-    let x = shared::rmsnorm::normalize(ctx, &residual, pre_ff_rms_weight);
+    let input: DmTensor<bf16, Chip, m![Dummy2], Slice, m![H]> = residual_hbm.to_dm(&mut ctx.tdma);
+    let x = shared::rmsnorm::normalize(ctx, &input, pre_ff_rms_weight);
 
-    let x: DmTensor<bf16, Chip, Cluster, Replicated, m![H]> = x.to_dm(&mut ctx.tdma);
+    // QKV와 같은 전체 H all-gather 뒤, 각 이웃 slice 쌍에 H 절반씩 보낸다.
+    let x: DmTensor<bf16, Chip, m![Dummy2], m![H / 240, 1 # 16], m![H % 240]> = x.to_dm(&mut ctx.tdma);
+    let x: DmTensor<bf16, Chip, m![Dummy2], Replicated, m![H]> = ctx.main
+        .begin(x.view())
+        .fetch::<m![1], m![H % 240]>()
+        .switch::<Replicated, m![H / 240]>(SwitchConfig::CustomBroadcast { ring_size: 256 })
+        .collect::<m![H / 16], m![H % 16]>()
+        .commit_trim::<m![H % 16]>()
+        .commit();
+    // 모든 slice에 H가 있으므로 각 쌍의 첫 slice만 읽는 view가 유효하다.
+    let rows: DmTensorView<'_, bf16, Chip, m![Dummy2], shared::mlp::UpGateRows, m![H]> = unsafe { x.view().reshape() };
+    let split: DmTensor<bf16, Chip, m![Dummy2], shared::mlp::UpGateRowsByColumns, m![1 # 2, H % 1920]> = ctx.main
+        .begin(rows)
+        .fetch::<m![H / 1920], m![H % 1920]>()
+        .switch::<shared::mlp::UpGateRowsByColumns, m![1 # 2]>(SwitchConfig::InterTranspose { slice1: 2, slice0: 1, time0: 1 })
+        .collect::<m![1 # 2, H / 16 % 120], m![H % 16]>()
+        .commit_trim::<m![H % 16]>()
+        .commit();
+    let x: DmTensor<bf16, Chip, m![Dummy2], shared::mlp::UpGateRowsByColumns, m![H % 1920]> = ctx.main
+        .begin(split.view())
+        .fetch::<m![1], m![H % 1920]>()
+        .collect::<m![H / 16 % 120], m![H % 16]>()
+        .commit_trim::<m![H % 16]>()
+        .commit();
     let x: DmTensor<bf16, Chip, Cluster, Slice, m![H]> = shared::mlp::feedforward(
         ctx,
         x,

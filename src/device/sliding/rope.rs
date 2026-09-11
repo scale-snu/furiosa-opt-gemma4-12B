@@ -2,27 +2,35 @@
 use furiosa_opt_std::prelude::*;
 
 use crate::Chip;
-use crate::axes::{Ds, E, Gs, Ns};
-use crate::device::layout::{Cluster, Slice};
+use crate::axes::{Ds, Dummy2, Dummy8, E, Gs, Ns};
+use crate::device::layout::Slice;
 
-type KvHeadsAcrossSlices = m![1 # 32, Ns];
+type Cluster = m![Ns / 4];
+
+type KvHeadsAcrossSlices = m![1 # 64, Ns % 4];
 
 pub(crate) fn apply_rope(
     ctx: &mut Context,
-    q: &DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Gs, Ds]>,
-    k: &DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Ds]>,
+    q: &DmTensor<bf16, Chip, Cluster, Slice, m![Ns % 4, Gs, Ds]>,
+    k: &DmTensor<bf16, Chip, Cluster, Slice, m![Ns % 4, Ds]>,
     rope_offset: &HbmTensor<i32, Chip, m![1]>,
     cos: &HbmTensor<bf16, Chip, m![E, Ds]>,
     sin: &HbmTensor<bf16, Chip, m![E, Ds]>,
 ) -> (
-    DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Gs, Ds]>,
-    DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Ds]>,
+    DmTensor<bf16, Chip, Cluster, Slice, m![Ns % 4, Gs, Ds]>,
+    DmTensor<bf16, Chip, Cluster, Slice, m![Ns % 4, Ds]>,
 ) {
-    let cos: DmTensor<bf16, Chip, Cluster, Slice, m![Ds]> = cos.dma_gather_scaled(rope_offset);
-    let sin: DmTensor<bf16, Chip, Cluster, Slice, m![Ds]> = sin.dma_gather_scaled(rope_offset);
-
-    let cos: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![Ds]> = cos.to_dm(&mut ctx.tdma);
-    let sin: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![Ds]> = sin.to_dm(&mut ctx.tdma);
+    // 단일 runtime index로 한 행을 먼저 읽는다. 그 행만 작은 HBM 임시 벡터를 통해
+    // 두 cluster의 네 head slice로 명시적으로 복제한다.
+    let cos: DmTensor<bf16, Chip, crate::device::layout::Cluster, Slice, m![Ds]> = cos.dma_gather_scaled(rope_offset);
+    let sin: DmTensor<bf16, Chip, crate::device::layout::Cluster, Slice, m![Ds]> = sin.dma_gather_scaled(rope_offset);
+    let cos: HbmTensor<bf16, Chip, m![Ds]> = cos.to_hbm(&mut ctx.tdma);
+    let sin: HbmTensor<bf16, Chip, m![Ds]> = sin.to_hbm(&mut ctx.tdma);
+    let cos: DmTensor<bf16, Chip, m![Dummy2], m![1 # 64, Dummy8 / 2], m![Ds]> = cos.to_dm(&mut ctx.tdma);
+    let sin: DmTensor<bf16, Chip, m![Dummy2], m![1 # 64, Dummy8 / 2], m![Ds]> = sin.to_dm(&mut ctx.tdma);
+    // 2 cluster × 4 slice의 모든 위치에 동일한 Ds table row가 들어 있다.
+    let cos: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![Ds]> = unsafe { cos.reshape() };
+    let sin: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![Ds]> = unsafe { sin.reshape() };
 
     let cos_vrf: VrfTensor<f32, Chip, Cluster, KvHeadsAcrossSlices, m![Ds]> = ctx
         .sub
@@ -40,29 +48,29 @@ pub(crate) fn apply_rope(
         .collect::<m![Ds / 8], m![Ds % 8]>()
         .to_vrf();
 
-    let q: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![1 # 8, Gs, Ds]> = ctx
+    let q: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![1 # 4, Gs, Ds]> = ctx
         .main
         .begin(q.view())
-        .fetch::<m![Ns], m![Gs, Ds]>()
-        .switch::<KvHeadsAcrossSlices, m![1 # 8]>(SwitchConfig::InterTranspose {
-            slice1: 8,
+        .fetch::<m![Ns % 4], m![Gs, Ds]>()
+        .switch::<KvHeadsAcrossSlices, m![1 # 4]>(SwitchConfig::InterTranspose {
+            slice1: 4,
             slice0: 1,
             time0: 1,
         })
-        .collect::<m![1 # 8, Gs, Ds / 16], m![Ds % 16]>()
+        .collect::<m![1 # 4, Gs, Ds / 16], m![Ds % 16]>()
         .commit_trim::<m![Ds % 16]>()
         .commit();
 
-    let k: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![1 # 8, Ds]> = ctx
+    let k: DmTensor<bf16, Chip, Cluster, KvHeadsAcrossSlices, m![1 # 4, Ds]> = ctx
         .main
         .begin(k.view())
-        .fetch::<m![Ns], m![Ds]>()
-        .switch::<KvHeadsAcrossSlices, m![1 # 8]>(SwitchConfig::InterTranspose {
-            slice1: 8,
+        .fetch::<m![Ns % 4], m![Ds]>()
+        .switch::<KvHeadsAcrossSlices, m![1 # 4]>(SwitchConfig::InterTranspose {
+            slice1: 4,
             slice0: 1,
             time0: 1,
         })
-        .collect::<m![1 # 8, Ds / 16], m![Ds % 16]>()
+        .collect::<m![1 # 4, Ds / 16], m![Ds % 16]>()
         .commit_trim::<m![Ds % 16]>()
         .commit();
 
@@ -228,21 +236,21 @@ pub(crate) fn apply_rope(
         .commit_trim::<m![Ds % 8]>()
         .commit();
 
-    let result_q: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Gs, Ds]> = ctx
+    let result_q: DmTensor<bf16, Chip, Cluster, Slice, m![Ns % 4, Gs, Ds]> = ctx
         .main
         .begin(result_q.view())
         .fetch::<m![1], m![Gs, Ds]>()
-        .switch::<Slice, m![Ns]>(SwitchConfig::Broadcast1 { slice1: 8, slice0: 1 })
-        .collect::<m![Ns, Gs, Ds / 16], m![Ds % 16]>()
+        .switch::<Slice, m![Ns % 4]>(SwitchConfig::Broadcast1 { slice1: 4, slice0: 1 })
+        .collect::<m![Ns % 4, Gs, Ds / 16], m![Ds % 16]>()
         .commit_trim::<m![Ds % 16]>()
         .commit();
 
-    let result_k: DmTensor<bf16, Chip, Cluster, Slice, m![Ns, Ds]> = ctx
+    let result_k: DmTensor<bf16, Chip, Cluster, Slice, m![Ns % 4, Ds]> = ctx
         .main
         .begin(result_k.view())
         .fetch::<m![1], m![Ds]>()
-        .switch::<Slice, m![Ns]>(SwitchConfig::Broadcast1 { slice1: 8, slice0: 1 })
-        .collect::<m![Ns, Ds / 16], m![Ds % 16]>()
+        .switch::<Slice, m![Ns % 4]>(SwitchConfig::Broadcast1 { slice1: 4, slice0: 1 })
+        .collect::<m![Ns % 4, Ds / 16], m![Ds % 16]>()
         .commit_trim::<m![Ds % 16]>()
         .commit();
 

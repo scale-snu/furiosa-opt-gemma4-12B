@@ -135,6 +135,12 @@ This builds the test binary, submits it through the RNGD scheduler, and reports 
 and real RNGD cycle counts. Use `--no-build` to reuse the latest binary or `--no-wait` to
 submit without waiting for the result.
 
+컴파일만 확인하려면 다음 명령을 사용한다. Arena 로그인이나 원격 제출은 수행하지 않는다.
+
+```sh
+./scripts/furiosa.sh test --release --test test_kernels --no-run
+```
+
 Submission is confirmed by `submitted job <id>`. The numeric server ID is different
 from the generated name `rngd_test_<random>`; use the server ID with `furiosa-arena status`.
 The script prints submission errors before exiting.
@@ -183,6 +189,26 @@ cargo +nightly-2026-05-01 install cargo-binstall
 cargo +nightly-2026-05-01 binstall cargo-furiosa-opt@0.6.0
 cargo install furiosa-schedule-viewer
 ```
+
+이 저장소의 기준은 `furiosa-opt-std = "=0.6.0"`, 컴파일러 `0.6.0`,
+Rust `nightly-2026-05-01`이다. Rust 라이브러리는 Cargo가 의존성으로 받아 빌드하고,
+컴파일러는 별도 실행 파일로 설치한다. `scripts/furiosa.sh`는 `Cargo.toml`의 고정 버전을
+읽어 `target/toolchains/furiosa-opt-<버전>/bin`에 컴파일러를 설치·선택하고 실행 전에
+버전을 검사한다. Rust 버전은 `rust-toolchain.toml`에서 읽는다.
+
+저장소 루트에서 다음 명령을 사용한다. 전역 `cargo furiosa-opt`는 다른 버전일 수 있으므로
+이 저장소의 NPU 빌드에는 공통 스크립트를 사용한다. `cargo clean`으로 `target/`을 지웠다면
+`./scripts/furiosa.sh --install`을 다시 실행한다.
+
+```sh
+./scripts/furiosa.sh --version
+./scripts/furiosa.sh compile
+./scripts/furiosa.sh test --release --test test_kernels --no-run
+./scripts/generate_compiled_schedules.sh
+```
+
+`cargo generate ... base-template`은 별도 예제 생성용이다. 이 Gemma 저장소에는 필요하지
+않으며, 여기의 실행 바이너리 이름은 `gemma4`와 `server`다.
 
 Configure the Furiosa Arena CLI once before using `scripts/rngd_test.sh`:
 
