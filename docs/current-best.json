@@ -1,0 +1,89 @@
+{
+  "updated_at": "2026-09-10T21:21:28.810329+00:00",
+  "verification_job": 17309,
+  "cycles": {
+    "sliding_project_qkv": 95763,
+    "sliding_attention_output": 43155,
+    "decoder_feedforward": 278869
+  },
+  "selection": {
+    "source": "E211",
+    "moa": {
+      "submission": "c0ffdd40",
+      "status": "completed",
+      "accuracy": "PASS",
+      "cycles": {
+        "sliding_project_qkv": 92586,
+        "sliding_attention_output": 39406,
+        "decoder_feedforward": 273805
+      },
+      "score": 7.2164,
+      "source_manifest": "target/moa-submissions/20260911-e211-three/source-manifest.json"
+    },
+    "changed_entrypoints": [
+      "sliding_project_qkv"
+    ],
+    "basis": "공식 점수7.2164 최고 갱신. E184와 교대8쌍에서 QKV 중앙값−5.306%, 평균−5.458%,7/8승. E209 대비중앙값−0.669%,5/8승. 공식동일소스3회 전체결과보존."
+  },
+  "snapshot": "/scale/cal/home/sehwan/furiosa-opt-gemma4-12B/target/optimization/20260910-145944-baseline.t8OKVA/active-checkout/target/experiments/official-best-e211-c0ffdd40",
+  "backup": "/scale/cal/home/sehwan/furiosa-opt-gemma4-12B/target/optimization/20260910-145944-baseline.t8OKVA/main-source-backups/e211-c0ffdd40",
+  "source_sha256": {
+    "src/ops.rs": "c32f92eba20d4a63c7fc9f7037870ebad8e6236da78e8a83a067f14fa760d710",
+    "src/device/layout.rs": "c96fee375e31303f04d08dc5cb5bd7cd2edaefa79f7c13b13a858e9e9ff6b644",
+    "src/device/shared/mlp.rs": "006988db73c9b26b52799fac4c8812c92cf655a328b829ee965d750be37ea2a6",
+    "src/device/shared/rmsnorm.rs": "18e2f067e42570cad6c4ba01e53400b6ba85bcf27e6642a14f45afd58d82aa59",
+    "src/device/sliding/projection.rs": "cbd87d53ce7c1a3a67380553bfc06a2d7d1408d6578f56ad1d0da1558f4b8a74",
+    "src/device/sliding/rmsnorm.rs": "21f18887dbb31a65d5521f94990f16eb0bf2066f2945e5d0ca609576ac684daa",
+    "src/device/sliding/rope.rs": "ad75eaf6b42a20304313fab7ec1b22f1bd79022dbd99c57d808f5fc2ada385d6"
+  },
+  "git_index_changed": false,
+  "moa_submission": {
+    "submission": "c0ffdd40",
+    "status": "completed",
+    "accuracy": "PASS",
+    "cycles": {
+      "sliding_project_qkv": 92586,
+      "sliding_attention_output": 39406,
+      "decoder_feedforward": 273805
+    },
+    "score": 7.2164,
+    "source_manifest": "target/moa-submissions/20260911-e211-three/source-manifest.json"
+  },
+  "previous_best_submission": {
+    "submission": "9442ca64",
+    "status": "completed",
+    "accuracy": "PASS",
+    "cycles": {
+      "sliding_project_qkv": 100029,
+      "sliding_attention_output": 38330,
+      "decoder_feedforward": 272870
+    },
+    "score": 7.106,
+    "source_manifest": "target/moa-submissions/20260911-e184-three/source-manifest.json"
+  },
+  "optimization_priority": "2026-09-11 00:55 UTC 공개 API 기준 가장 약한 attention output(+2.03%)을 우선한다. 최신값은 optimization-priority.json 참조.",
+  "leaderboard_comparison": {
+    "source": "공개 API 확인 2026-09-10T21:15:54.426151+00:00",
+    "url": "https://micro2026-moa.github.io/leaderboard.html",
+    "submission": "c5dc8d05",
+    "score": 6.827859519535745,
+    "cycles": {
+      "sliding_project_qkv": 96160,
+      "sliding_attention_output": 42553,
+      "decoder_feedforward": 288220
+    }
+  },
+  "continuous_combined_binary_executed": true,
+  "validation_jobs": [
+    17309,
+    17316
+  ],
+  "selection_basis": "공식 점수7.2164 최고 갱신. E184와 교대8쌍에서 QKV 중앙값−5.306%, 평균−5.458%,7/8승. E209 대비중앙값−0.669%,5/8승. 공식동일소스3회 전체결과보존.",
+  "official_repeats": 3,
+  "official_scores": [
+    6.8484,
+    6.8883,
+    7.2164
+  ],
+  "source23_original_and_best_match": true
+}
